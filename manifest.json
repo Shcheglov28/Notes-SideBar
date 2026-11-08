@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Notes Sidebar",
+  "version": "0.3.0",
+  "description": "Заметки в постоянной боковой панели Firefox.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "notes-sidebar@local.dev",
+      "strict_min_version": "121.0"
+    }
+  },
+  "permissions": ["storage", "tabs", "downloads"],
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "sidebar_action": {
+    "default_title": "Notes Sidebar",
+    "default_panel": "sidebar/sidebar.html",
+    "default_icon": "icons/icon.svg",
+    "open_at_install": true
+  },
+  "commands": {
+    "_execute_sidebar_action": {
+      "suggested_key": { "default": "Alt+Shift+N" },
+      "description": "Открыть / закрыть Notes Sidebar"
+    }
+  }
+}

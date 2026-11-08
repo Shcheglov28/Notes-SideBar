@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes Sidebar</title>
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+
+  <!-- ===== Экран: список ===== -->
+  <section class="screen" id="screen-list">
+    <header class="header">
+      <h1 class="header-title">Заметки</h1>
+      <div class="header-actions">
+        <button class="icon-btn" id="btn-mode" data-tip="Ручная сортировка: выкл" aria-label="Ручная сортировка" aria-pressed="false">
+          <svg viewBox="0 0 24 24"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-sort" data-tip="Сначала новые" aria-label="Сортировка по дате">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h12M3 18h6"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-new" data-tip="Новая заметка" aria-label="Новая заметка">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-settings" data-tip="Настройки" aria-label="Настройки">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="content scroll">
+      <ul class="note-list" id="note-list"></ul>
+
+      <div class="empty" id="empty-state" hidden>
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>
+        </div>
+        <h2 class="empty-title">Пока нет заметок</h2>
+        <p class="empty-text">Нажмите «+», чтобы создать первую. Ссылка и заголовок текущей страницы подставятся автоматически.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Экран: редактор ===== -->
+  <section class="screen" id="screen-editor">
+    <header class="header">
+      <div class="header-actions">
+        <button class="icon-btn" id="btn-back-editor" data-tip="Назад к списку" aria-label="Назад">
+          <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+      </div>
+      <span class="save-status" id="save-status"></span>
+      <div class="header-actions">
+        <button class="icon-btn danger" id="btn-delete" data-tip="Удалить заметку" aria-label="Удалить">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M6 6l1 14a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-14M10 11v6M14 11v6"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="editor">
+      <input class="editor-title" id="editor-title" type="text" placeholder="Заголовок" autocomplete="off">
+      <a class="editor-source" id="editor-source" href="#" hidden>
+        <svg viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+        <span id="editor-source-text"></span>
+      </a>
+
+      <div class="color-picker" id="color-picker" role="radiogroup" aria-label="Цвет заметки">
+        <button class="color-dot" type="button" data-color="gray"   data-tip="Серый"       role="radio" aria-label="Серый"></button>
+        <button class="color-dot" type="button" data-color="red"    data-tip="Красный"     role="radio" aria-label="Красный"></button>
+        <button class="color-dot" type="button" data-color="yellow" data-tip="Жёлтый"      role="radio" aria-label="Жёлтый"></button>
+        <button class="color-dot" type="button" data-color="green"  data-tip="Зелёный"     role="radio" aria-label="Зелёный"></button>
+        <button class="color-dot" type="button" data-color="blue"   data-tip="Синий"       role="radio" aria-label="Синий"></button>
+        <button class="color-dot" type="button" data-color="purple" data-tip="Фиолетовый"  role="radio" aria-label="Фиолетовый"></button>
+      </div>
+
+      <textarea class="editor-body" id="editor-body" placeholder="Начните писать…"></textarea>
+    </div>
+  </section>
+
+  <!-- ===== Экран: настройки ===== -->
+  <section class="screen" id="screen-settings">
+    <header class="header">
+      <div class="header-actions">
+        <button class="icon-btn" id="btn-back-settings" data-tip="Назад к списку" aria-label="Назад">
+          <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+      </div>
+      <h1 class="header-title center">Настройки</h1>
+      <div class="header-actions placeholder"></div>
+    </header>
+
+    <div class="content scroll">
+      <div class="card">
+        <h2 class="card-title">Акцентный цвет</h2>
+        <p class="card-text">Перекрашивает кнопки и активные элементы интерфейса.</p>
+        <div class="palette" id="accent-palette" role="radiogroup" aria-label="Акцентный цвет"></div>
+        <button class="btn secondary" id="btn-reset" data-tip="Сбросить цвет на стандартный">
+          <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg>
+          Вернуть по умолчанию
+        </button>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">Данные</h2>
+        <p class="card-text">Все заметки хранятся локально в браузере. Вы можете выгрузить их в JSON-файл.</p>
+        <button class="btn" id="btn-export">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+          Экспорт в JSON
+        </button>
+        <p class="card-hint" id="export-hint"></p>
+      </div>
+    </div>
+  </section>
+
+  <div class="tooltip" id="tooltip" role="tooltip"></div>
+
+  <script src="lib/Sortable.min.js"></script>
+  <script src="sidebar.js"></script>
+</body>
+</html>
