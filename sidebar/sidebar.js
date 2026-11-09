@@ -6,7 +6,7 @@
 const STORAGE_KEY = "notes";
 const SETTINGS_KEY = "settings";
 const ACCENT_KEY = "settings_accentColor";
-const AUTOSAVE_DELAY = 500;   // мс
+const AUTOSAVE_DELAY = 499;   // мс
 const TOOLTIP_DELAY = 250;    // мс
 
 const COLORS = ["gray", "red", "yellow", "green", "blue", "purple"];
