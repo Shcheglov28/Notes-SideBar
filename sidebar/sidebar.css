@@ -22,6 +22,7 @@
 
   --tooltip-bg: #1C2330;
   --tooltip-text: #FFFFFF;
+  --toast-hover: #333C4D;
 
   /* Цветовые метки: основной цвет / фон карточки / фон при наведении */
   --c-gray: #9AA3B2;    --c-gray-soft: #FFFFFF;    --c-gray-hover: #F6F7F9;
@@ -64,6 +65,7 @@
 
   --tooltip-bg: #E6E9EF;
   --tooltip-text: #15181E;
+  --toast-hover: #CDD3DE;
 
   /* Цветовые метки: затемнённые фоны карточек и более яркие полоски */
   --c-gray: #8B94A5;    --c-gray-soft: #1E222A;    --c-gray-hover: #272C36;
@@ -130,12 +132,16 @@ svg {
   flex-shrink: 0;
 }
 .header-title {
+  min-width: 0;
   margin: 0;
   font-size: 15px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .header-title.center { flex: 1; text-align: center; }
-.header-actions { display: flex; gap: var(--space-1); }
+.header-actions { display: flex; gap: var(--space-1); flex-shrink: 0; }
 .header-actions.placeholder { width: 30px; }
 
 .icon-btn {
@@ -170,12 +176,73 @@ svg {
 #btn-sort svg { transition: transform var(--fast); }
 #btn-sort.asc svg { transform: scaleY(-1); }
 
+/* Активное состояние поиска */
+#btn-search[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .save-status {
   flex: 1;
   text-align: center;
   font-size: 11px;
   color: var(--text-faint);
 }
+
+/* ===== Поиск ===== */
+.search-bar {
+  flex-shrink: 0;
+  padding: 8px var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.search-bar[hidden] { display: none; }
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  transition: border-color var(--fade), background var(--fade);
+}
+.search-field:focus-within {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+.search-field > svg { width: 15px; height: 15px; }
+.search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+}
+.search-input::placeholder { color: var(--text-faint); }
+.search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background var(--fade), color var(--fade), border-color var(--fade);
+}
+.search-clear[hidden] { display: none; }
+.search-clear svg { width: 13px; height: 13px; }
+.search-clear:hover { background: var(--bg-hover); color: var(--text); }
+.search-clear:focus-visible { outline: none; border-color: var(--accent); }
 
 /* ===== Контент ===== */
 .content { flex: 1; padding: var(--space-3); }
@@ -524,12 +591,79 @@ svg {
 .btn:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
 [data-theme="dark"] .btn:focus-visible { outline-color: var(--accent); }
 
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.btn-row .btn { flex: 1 1 auto; justify-content: center; white-space: nowrap; }
+
 .btn.secondary {
   background: var(--bg);
   border-color: var(--border-strong);
   color: var(--text);
 }
 .btn.secondary:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+
+/* ===== Тост (уведомления и Undo) ===== */
+.toast {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--tooltip-bg);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--tooltip-bg);
+  color: var(--tooltip-text);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity var(--fast), transform var(--fast);
+}
+.toast[hidden] { display: none; }
+.toast.show { opacity: 1; transform: none; }
+.toast.success { border-left-color: var(--c-green); }
+.toast.error { border-left-color: var(--danger); }
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.toast-action {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--fade);
+}
+.toast-action[hidden] { display: none; }
+.toast-action:hover { background: var(--toast-hover); }
+.toast-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.toast-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  border-radius: 0 0 var(--radius-m) var(--radius-m);
+  background: currentColor;
+  opacity: 0.45;
+  transform-origin: left center;
+}
+.toast-progress[hidden] { display: none; }
+@keyframes toast-progress {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
 
 /* ===== Тултип ===== */
 .tooltip {

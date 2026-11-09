@@ -16,6 +16,9 @@
         <button class="icon-btn" id="btn-mode" data-tip="Ручная сортировка: выкл" aria-label="Ручная сортировка" aria-pressed="false">
           <svg viewBox="0 0 24 24"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>
         </button>
+        <button class="icon-btn" id="btn-search" type="button" data-tip="Поиск" aria-label="Поиск по заметкам" aria-pressed="false" aria-controls="search-bar" aria-expanded="false">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+        </button>
         <button class="icon-btn" id="btn-sort" data-tip="Сначала новые" aria-label="Сортировка по дате">
           <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h12M3 18h6"/></svg>
         </button>
@@ -28,6 +31,16 @@
       </div>
     </header>
 
+    <div class="search-bar" id="search-bar" role="search" hidden>
+      <div class="search-field">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+        <input class="search-input" id="search-input" type="text" placeholder="Поиск по заметкам…" autocomplete="off" spellcheck="false" aria-label="Поиск по заметкам">
+        <button class="search-clear" id="btn-search-clear" type="button" data-tip="Очистить поиск" aria-label="Очистить поиск" hidden>
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+    </div>
+
     <div class="content scroll">
       <ul class="note-list" id="note-list"></ul>
 
@@ -37,6 +50,14 @@
         </div>
         <h2 class="empty-title">Пока нету заметок</h2>
         <p class="empty-text">Нажмите «+», чтобы создать первую. Ссылка и заголовок текущей страницы подставятся автоматически.</p>
+      </div>
+
+      <div class="empty" id="empty-search" aria-live="polite" hidden>
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3M8.5 8.5l5 5M13.5 8.5l-5 5"/></svg>
+        </div>
+        <h2 class="empty-title">Ничего не найдено</h2>
+        <p class="empty-text">Попробуйте изменить запрос или очистить поиск.</p>
       </div>
     </div>
   </section>
@@ -117,15 +138,28 @@
 
       <div class="card">
         <h2 class="card-title">Данные</h2>
-        <p class="card-text">Все заметки хранятся локально в браузере. Вы можете выгрузить их в JSON-файл.</p>
-        <button class="btn" id="btn-export">
-          <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
-          Экспорт в JSON
-        </button>
+        <p class="card-text">Все заметки хранятся локально в браузере. Вы можете выгрузить их в JSON-файл или восстановить из резервной копии.</p>
+        <div class="btn-row">
+          <button class="btn" id="btn-export">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+            Экспорт в JSON
+          </button>
+          <button class="btn secondary" id="btn-import" type="button" data-tip="Импорт из JSON">
+            <svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"/></svg>
+            Импорт из JSON
+          </button>
+        </div>
+        <input type="file" id="import-file" accept=".json,application/json" hidden>
         <p class="card-hint" id="export-hint"></p>
       </div>
     </div>
   </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true" hidden>
+    <span class="toast-text" id="toast-text"></span>
+    <button class="toast-action" id="toast-action" type="button" hidden></button>
+    <span class="toast-progress" id="toast-progress" aria-hidden="true" hidden></span>
+  </div>
 
   <div class="tooltip" id="tooltip" role="tooltip"></div>
 

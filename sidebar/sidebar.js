@@ -4,10 +4,13 @@
    Константы и модель данных
    ========================================================= */
 const STORAGE_KEY = "notes";
+const TRASH_KEY = "notes_trash";   // удалённые заметки, ожидающие подтверждения (Корзина)
 const SETTINGS_KEY = "settings";
 const ACCENT_KEY = "settings_accentColor";
 const AUTOSAVE_DELAY = 499;   // мс
 const TOOLTIP_DELAY = 250;    // мс
+const UNDO_DELAY = 3000;      // мс — сколько доступна отмена удаления
+const NOTICE_DELAY = 4000;    // мс — обычные уведомления
 
 const COLORS = ["gray", "red", "yellow", "green", "blue", "purple"];
 const DEFAULT_COLOR = "gray";
@@ -61,15 +64,38 @@ function createNote({ title = "", content = "", url = "" } = {}) {
   };
 }
 
-// Приводит заметки из хранилища (Фаза 1/2) к актуальной схеме
+// Допустимые схемы URL (совпадает с проверкой при создании заметки)
+const URL_SCHEMES = /^(https?|file|ftp):/i;
+
+// Возвращает строку как есть либо "" для любого нестрокового значения
+function strOrEmpty(value) {
+  return typeof value === "string" ? value : "";
+}
+
+// Оставляет только URL с допустимой схемой (http/https/file/ftp), иначе ""
+function safeUrl(value) {
+  const url = strOrEmpty(value);
+  return url === "" || URL_SCHEMES.test(url) ? url : "";
+}
+
+// Строгая проверка поля: должно быть строкой либо отсутствовать (null/undefined)
+function assertStringField(value, field, label) {
+  if (value != null && typeof value !== "string") {
+    throw new Error(`${label}: поле ${field} должно быть строкой`);
+  }
+}
+
+// Приводит заметки из хранилища (Фаза 1/2) к актуальной схеме.
+// Для некорректных записей возвращает null — вызывающий код отфильтровывает их.
 function normalizeNote(n) {
+  if (!n || typeof n !== "object" || Array.isArray(n)) return null;
   const { order, ...rest } = n;   // старое поле `order` → `orderIndex`
   const idx = Number.isFinite(n.orderIndex) ? n.orderIndex : (Number.isFinite(order) ? order : null);
   return {
     ...rest,
-    title: n.title || "",
-    content: n.content || "",
-    url: n.url || "",
+    title: strOrEmpty(n.title),
+    content: strOrEmpty(n.content),
+    url: strOrEmpty(n.url),
     color: COLORS.includes(n.color) ? n.color : DEFAULT_COLOR,
     orderIndex: idx,
     links: Array.isArray(n.links) ? n.links : []
@@ -80,13 +106,29 @@ function normalizeNote(n) {
    Хранилище
    ========================================================= */
 let notes = [];
+let trash = [];   // очередь удалённых заметок: { note, index, at } — физически ещё в хранилище
 let settings = { sort: "newest", mode: "auto", theme: "light" };   // sort: направление по дате, mode: auto | manual, theme: light | dark
 let accentId = DEFAULT_ACCENT;
 
 async function loadAll() {
-  const data = await browser.storage.local.get([STORAGE_KEY, SETTINGS_KEY, ACCENT_KEY]);
+  const data = await browser.storage.local.get([STORAGE_KEY, SETTINGS_KEY, ACCENT_KEY, TRASH_KEY]);
 
-  notes = Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY].map(normalizeNote) : [];
+  notes = Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY].map(normalizeNote).filter(Boolean) : [];
+
+  trash = Array.isArray(data[TRASH_KEY])
+    ? data[TRASH_KEY]
+        .map((entry) => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+          const note = normalizeNote(entry.note);
+          if (!note) return null;
+          return {
+            note,
+            index: Number.isFinite(entry.index) ? entry.index : null,
+            at: Number.isFinite(entry.at) ? entry.at : Date.now()
+          };
+        })
+        .filter(Boolean)
+    : [];
 
   const s = data[SETTINGS_KEY];
   if (s) {
@@ -98,8 +140,9 @@ async function loadAll() {
   if (ACCENTS.some((a) => a.id === data[ACCENT_KEY])) accentId = data[ACCENT_KEY];
 }
 
+// Атомарно сохраняет и заметки, и корзину — исключает рассинхрон между ними
 function persist() {
-  return browser.storage.local.set({ [STORAGE_KEY]: notes });
+  return browser.storage.local.set({ [STORAGE_KEY]: notes, [TRASH_KEY]: trash });
 }
 
 function persistSettings() {
@@ -118,18 +161,28 @@ const screens = {
 const els = {
   list: $("note-list"),
   empty: $("empty-state"),
+  emptySearch: $("empty-search"),
+  searchBar: $("search-bar"),
+  searchInput: $("search-input"),
+  searchClear: $("btn-search-clear"),
+  searchBtn: $("btn-search"),
   title: $("editor-title"),
   body: $("editor-body"),
   source: $("editor-source"),
   sourceText: $("editor-source-text"),
   status: $("save-status"),
   exportHint: $("export-hint"),
+  importFile: $("import-file"),
   sortBtn: $("btn-sort"),
   modeBtn: $("btn-mode"),
   colorPicker: $("color-picker"),
   palette: $("accent-palette"),
   themeSwitch: $("theme-switch"),
-  themeState: $("theme-state")
+  themeState: $("theme-state"),
+  toast: $("toast"),
+  toastText: $("toast-text"),
+  toastAction: $("toast-action"),
+  toastProgress: $("toast-progress")
 };
 
 /* =========================================================
@@ -240,8 +293,10 @@ function updateSortUI() {
   els.modeBtn.dataset.tip = MODE_LABELS[settings.mode];
   els.modeBtn.setAttribute("aria-pressed", String(isManual()));
 
-  els.list.classList.toggle("manual", isManual());
-  if (sortable) sortable.option("disabled", !isManual());
+  // Во время поиска перетаскивание отключено: скрытые заметки не должны менять порядок
+  const searching = !els.searchBar.hidden;
+  els.list.classList.toggle("manual", isManual() && !searching);
+  if (sortable) sortable.option("disabled", !isManual() || searching);
 }
 
 function toggleSort() {
@@ -379,24 +434,100 @@ function buildNoteItem(note) {
   return li;
 }
 
-function renderList() {
-  els.list.textContent = "";
-  const sorted = sortedNotes();
-  els.empty.hidden = sorted.length > 0;
+function searchQuery() {
+  return els.searchBar.hidden ? "" : els.searchInput.value.trim();
+}
 
-  const items = sorted.map((note, i) => {
+function noteMatches(note, needle) {
+  return note.title.toLowerCase().includes(needle) ||
+    note.content.toLowerCase().includes(needle);
+}
+
+function updateEmptyStates() {
+  const q = searchQuery();
+  const visible = els.list.querySelectorAll(".note-item:not(.removing)").length;
+  els.empty.hidden = !(visible === 0 && notes.length === 0 && !q);
+  els.emptySearch.hidden = !(visible === 0 && !!q);
+}
+
+function openSearch() {
+  els.searchBar.hidden = false;
+  els.searchBtn.setAttribute("aria-pressed", "true");
+  els.searchBtn.setAttribute("aria-expanded", "true");
+  els.searchBtn.dataset.tip = "Закрыть поиск";
+  els.searchBtn.setAttribute("aria-label", "Закрыть поиск");
+  updateSortUI();
+  els.searchInput.focus();
+}
+
+function closeSearch({ clear = true } = {}) {
+  els.searchBar.hidden = true;
+  els.searchBtn.setAttribute("aria-pressed", "false");
+  els.searchBtn.setAttribute("aria-expanded", "false");
+  els.searchBtn.dataset.tip = "Поиск";
+  els.searchBtn.setAttribute("aria-label", "Поиск по заметкам");
+  if (clear) {
+    els.searchInput.value = "";
+    els.searchClear.hidden = true;
+  }
+  updateSortUI();
+  renderList();
+}
+
+function toggleSearch() {
+  if (els.searchBar.hidden) openSearch();
+  else closeSearch();
+}
+
+let searchDebounceTimer = null;
+const SEARCH_DEBOUNCE = 180;   // мс
+
+function onSearchInput() {
+  els.searchClear.hidden = !els.searchInput.value;
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(renderList, SEARCH_DEBOUNCE);
+}
+
+function clearSearchInput() {
+  els.searchInput.value = "";
+  els.searchClear.hidden = true;
+  els.searchInput.focus();
+  clearTimeout(searchDebounceTimer);
+  renderList();
+}
+
+function renderList() {
+  const q = searchQuery();
+  const needle = q.toLowerCase();
+  const sorted = sortedNotes();
+  const visible = needle ? sorted.filter((note) => noteMatches(note, needle)) : sorted;
+
+  const prevScroll = els.list.scrollTop;   // сохраняем позицию до перерисовки
+  els.list.textContent = "";
+
+  const instant = !!needle;   // при поиске список обновляется без каскадной анимации
+  const items = visible.map((note, i) => {
     const li = buildNoteItem(note);
-    li.style.transitionDelay = `${Math.min(i, 8) * 25}ms`;   // лёгкий каскад
+    if (instant) {
+      li.classList.add("in");
+    } else {
+      li.style.transitionDelay = `${Math.min(i, 8) * 25}ms`;   // лёгкий каскад
+    }
     els.list.appendChild(li);
     return li;
   });
 
-  // двойной rAF: стартовое состояние (opacity 0) должно успеть отрисоваться
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    items.forEach((li) => li.classList.add("in"));
-  }));
-  // после появления сбрасываем задержку, чтобы hover не «тормозил»
-  setTimeout(() => items.forEach((li) => (li.style.transitionDelay = "")), 500);
+  els.list.scrollTop = prevScroll;   // возвращаем прокрутку, чтобы список не «прыгал»
+  updateEmptyStates();
+
+  if (!instant) {
+    // двойной rAF: стартовое состояние (opacity 0) должно успеть отрисоваться
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      items.forEach((li) => li.classList.add("in"));
+    }));
+    // после появления сбрасываем задержку, чтобы hover не «тормозил»
+    setTimeout(() => items.forEach((li) => (li.style.transitionDelay = "")), 500);
+  }
 }
 
 function openList() {
@@ -404,9 +535,89 @@ function openList() {
   showScreen("list");
 }
 
-function removeNoteFromList(li) {
+/* =========================================================
+   Корзина удалений
+   =========================================================
+   Удалённая заметка не стирается из хранилища сразу: она уезжает
+   в очередь `trash` и живёт там до истечения таймаута тоста. Undo
+   возвращает её обратно, таймаут — физически удаляет. */
+// Единый таймер на всю очередь: пока тост Undo доступен, ни одна
+// из подряд удалённых заметок не теряется. Каждое новое удаление
+// перезапускает таймер, поэтому все записи живут до истечения тоста.
+let trashCommitTimer = null;
+
+function scheduleTrashCommit() {
+  clearTrashCommit();
+  trashCommitTimer = setTimeout(commitTrash, UNDO_DELAY);
+}
+
+function clearTrashCommit() {
+  if (trashCommitTimer) clearTimeout(trashCommitTimer);
+  trashCommitTimer = null;
+}
+
+// Фиксирует удаление: очищает всю очередь корзины и сохраняет хранилище
+async function commitTrash() {
+  clearTrashCommit();
+  if (!trash.length) return;
+  const pending = trash;
+  trash = [];
+  try {
+    await persist();
+  } catch (err) {
+    trash = pending;   // не смогли — возвращаем очередь как была
+  }
+}
+
+// Удаляет заметку из памяти и кладёт в корзину; при сбое persist — откат
+async function stageDeletion(note, index) {
+  notes.splice(index, 1);
+  const entry = { note, index, at: Date.now() };
+  trash.push(entry);
+  try {
+    await persist();
+  } catch (err) {
+    trash.pop();
+    notes.splice(index, 0, note);
+    throw err;
+  }
+  scheduleTrashCommit();
+  return entry;
+}
+
+// Финализирует «подвисшие» записи корзины после перезагрузки панели:
+// тост уже не показан, отменить нельзя — доводим удаление до конца
+async function finalizeStaleTrash() {
+  if (!trash.length) return;
+  trash = [];
+  try {
+    await persist();
+  } catch (err) {
+    // не критично: записи останутся в хранилище и будут дочищены позже
+  }
+}
+
+// Восстанавливает последнюю удалённую заметку (LIFO)
+function undoLastDeletion() {
+  const entry = trash[trash.length - 1];
+  if (!entry) return;
+  trash.pop();
+  restoreDeletedNote(entry.note, entry.index);
+  // Остались ещё удалённые заметки — держим тост и таймер живыми
+  if (trash.length) {
+    scheduleTrashCommit();
+    showUndoToast();
+  } else {
+    clearTrashCommit();
+  }
+}
+
+async function removeNoteFromList(li) {
   if (li.classList.contains("removing")) return;
   const id = li.dataset.id;
+  const note = notes.find((n) => n.id === id);
+  if (!note) return;
+  const index = notes.indexOf(note);
 
   hideTooltip();
   li.style.transitionDelay = "0ms";
@@ -414,15 +625,29 @@ function removeNoteFromList(li) {
   void li.offsetHeight;
   li.classList.add("removing");
 
-  notes = notes.filter((n) => n.id !== id);
-  persist();
+  try {
+    await stageDeletion(note, index);
+  } catch (err) {
+    // рассинхрон памяти и хранилища недопустим — возвращаем заметку в список
+    li.classList.remove("removing");
+    li.style.height = "";
+    renderList();
+    showToast({
+      text: `Не удалось удалить заметку: ${err && err.message ? err.message : "ошибка записи"}`,
+      variant: "error",
+      duration: 5000
+    });
+    return;
+  }
+
+  showUndoToast();
 
   let done = false;
   const finish = () => {
     if (done) return;
     done = true;
     li.remove();
-    if (!notes.length) els.empty.hidden = false;
+    updateEmptyStates();
   };
   li.addEventListener("transitionend", (e) => {
     if (e.target === li && e.propertyName === "height") finish();
@@ -474,20 +699,48 @@ function scheduleSave() {
   saveTimer = setTimeout(flushSave, AUTOSAVE_DELAY);
 }
 
-async function flushSave() {
-  clearTimeout(saveTimer);
-  saveTimer = null;
-  if (!dirty || !editingId) return;
+// Переносит значения из полей редактора в заметку; возвращает false,
+// если сохранять нечего или заметку удалили в другом окне (защита от «воскрешения»)
+function commitEditorFields() {
+  if (!dirty || !editingId) return false;
   const note = notes.find((n) => n.id === editingId);
-  if (!note) return;
-
+  if (!note) {           // заметки уже нет в актуальном массиве — не сохраняем
+    dirty = false;
+    return false;
+  }
   note.title = els.title.value;
   note.content = els.body.value;
   note.updatedAt = Date.now();
   dirty = false;
+  return true;
+}
 
+async function flushSave() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  // Заметку могли удалить в другом окне — сохранение «воскресило» бы её
+  if (editingId && !notes.some((n) => n.id === editingId)) {
+    dirty = false;
+    showToast({
+      text: "Заметка была удалена в другом окне",
+      variant: "error",
+      duration: 5000
+    });
+    editingId = null;
+    openList();
+    return;
+  }
+  if (!commitEditorFields()) return;
   await persist();
   if (currentScreen === "editor") els.status.textContent = "Сохранено";
+}
+
+// Синхронный вариант для pagehide: не ждём промис, чтобы не потерять правки
+function flushSaveSync() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (!commitEditorFields()) return;
+  browser.storage.local.set({ [STORAGE_KEY]: notes, [TRASH_KEY]: trash });
 }
 
 function setNoteColor(color) {
@@ -507,13 +760,38 @@ async function closeEditor() {
 
 async function deleteCurrent() {
   if (!editingId) return;
-  if (!confirm("Удалить эту заметку?")) return;
+  const note = notes.find((n) => n.id === editingId);
+  if (!note) {
+    editingId = null;
+    openList();
+    return;
+  }
+
   clearTimeout(saveTimer);
+  saveTimer = null;
   dirty = false;
-  notes = notes.filter((n) => n.id !== editingId);
+
+  // Фиксируем актуальные значения из полей, чтобы Undo вернул последнюю версию
+  note.title = els.title.value;
+  note.content = els.body.value;
+  note.updatedAt = Date.now();
+
+  const index = notes.indexOf(note);
   editingId = null;
-  await persist();
+  showScreen("list");
+  try {
+    await stageDeletion(note, index);
+  } catch (err) {
+    renderList();
+    showToast({
+      text: `Не удалось удалить заметку: ${err && err.message ? err.message : "ошибка записи"}`,
+      variant: "error",
+      duration: 5000
+    });
+    return;
+  }
   openList();
+  showUndoToast();
 }
 
 /* =========================================================
@@ -573,6 +851,188 @@ async function exportJson() {
 }
 
 /* =========================================================
+   Импорт из JSON
+   ========================================================= */
+function extractImportedList(data) {
+  const list = Array.isArray(data)
+    ? data
+    : (data && typeof data === "object" && Array.isArray(data.notes) ? data.notes : null);
+  if (!list) throw new Error("ожидается массив заметок");
+  if (!list.length) throw new Error("в файле нет заметок");
+  return list;
+}
+
+function toImportedNote(raw, index) {
+  const label = `заметка №${index + 1}`;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`${label}: ожидается объект`);
+  }
+  if (!("title" in raw) && !("content" in raw) && !("body" in raw) && !("url" in raw)) {
+    throw new Error(`${label}: нет полей title/content/url`);
+  }
+  assertStringField(raw.title, "title", label);
+  assertStringField(raw.content, "content", label);
+  assertStringField(raw.body, "body", label);
+  assertStringField(raw.url, "url", label);
+
+  const note = normalizeNote({
+    id: raw.id,
+    title: strOrEmpty(raw.title),
+    content: strOrEmpty(raw.content) || strOrEmpty(raw.body),
+    url: strOrEmpty(raw.url),
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    color: raw.color,
+    orderIndex: raw.orderIndex,
+    order: raw.order,
+    links: raw.links
+  });
+  if (!note) throw new Error(`${label}: некорректная структура заметки`);
+
+  // Отбрасываем URL с недопустимой схемой — как при создании заметки
+  note.url = safeUrl(note.url);
+
+  if (typeof note.id !== "string" || !note.id) note.id = createNote().id;
+  const now = Date.now();
+  if (!Number.isFinite(note.createdAt)) note.createdAt = now;
+  if (!Number.isFinite(note.updatedAt)) note.updatedAt = note.createdAt;
+  return note;
+}
+
+async function importJson(file) {
+  try {
+    let data;
+    let text;
+    try {
+      text = await file.text();
+    } catch {
+      throw new Error("не удалось прочитать файл");
+    }
+    try {
+      data = JSON.parse(text.replace(/^\uFEFF/, ""));   // срезаем BOM, если файл сохранён на Windows
+    } catch {
+      throw new Error("файл не является корректным JSON");
+    }
+
+    const rawList = extractImportedList(data);
+    const existingIds = new Set(notes.map((n) => n.id));
+    const imported = [];
+    let skipped = 0;
+
+    rawList.forEach((raw, i) => {
+      const note = toImportedNote(raw, i);
+      if (existingIds.has(note.id)) {
+        skipped += 1;
+        return;
+      }
+      existingIds.add(note.id);
+      imported.push(note);
+    });
+
+    if (!imported.length) {
+      const message = skipped ? `Все заметки уже есть в хранилище (${skipped})` : "Нечего импортировать";
+      els.exportHint.textContent = message;
+      showToast({ text: message });
+      return;
+    }
+
+    const previousNotes = notes;
+    notes = notes.concat(imported);
+    try {
+      await persist();
+    } catch (err) {
+      notes = previousNotes;
+      throw err;
+    }
+    if (isManual()) ensureOrder();
+    if (currentScreen === "list") renderList();
+
+    const summary = `Импортировано заметок: ${imported.length}${skipped ? `, пропущено: ${skipped}` : ""}`;
+    els.exportHint.textContent = summary;
+    showToast({
+      text: summary,
+      variant: "success"
+    });
+  } catch (err) {
+    els.exportHint.textContent = "Импорт не выполнен";
+    showToast({
+      text: `Ошибка импорта: ${err && err.message ? err.message : "не удалось прочитать файл"}`,
+      variant: "error",
+      duration: 5000
+    });
+  }
+}
+
+/* =========================================================
+   Тост: уведомления и отмена удаления
+   ========================================================= */
+let toastTimer = null;
+let toastActionHandler = null;
+
+function dismissToast() {
+  clearTimeout(toastTimer);
+  toastTimer = null;
+  toastActionHandler = null;
+  els.toast.classList.remove("show", "success", "error");
+  els.toast.hidden = true;
+  els.toastAction.hidden = true;
+  els.toastProgress.hidden = true;
+  els.toastProgress.style.animation = "none";
+}
+
+function showToast({
+  text,
+  actionLabel = "",
+  onAction = null,
+  duration = NOTICE_DELAY,
+  variant = ""
+}) {
+  dismissToast();
+
+  els.toast.hidden = false;
+  if (variant) els.toast.classList.add(variant);
+  els.toast.setAttribute("role", variant === "error" ? "alert" : "status");
+  els.toast.setAttribute("aria-live", variant === "error" ? "assertive" : "polite");
+
+  els.toastText.textContent = text;
+  els.toastAction.textContent = actionLabel;
+  els.toastAction.hidden = !actionLabel;
+  toastActionHandler = onAction;
+
+  if (actionLabel) {
+    els.toastProgress.hidden = false;
+    els.toastProgress.style.animation = "none";
+    void els.toastProgress.offsetWidth;
+    els.toastProgress.style.animation = `toast-progress ${duration}ms linear forwards`;
+  }
+
+  void els.toast.offsetWidth;   // reflow, чтобы transition сработал
+  els.toast.classList.add("show");
+
+  toastTimer = setTimeout(dismissToast, duration);
+}
+
+function restoreDeletedNote(note, index) {
+  if (notes.some((n) => n.id === note.id)) return;
+  const at = Number.isFinite(index) ? Math.min(Math.max(index, 0), notes.length) : notes.length;
+  notes.splice(at, 0, note);
+  persist();
+  // Сбрасываем фильтр поиска, чтобы восстановленная заметка была видна
+  if (!els.searchBar.hidden) closeSearch({ clear: true });
+  else renderList();
+}
+
+function showUndoToast() {
+  const count = trash.length;
+  showToast({
+    text: count > 1 ? `Удалено заметок: ${count}` : "Заметка удалена",
+    actionLabel: "Отменить",
+    duration: UNDO_DELAY,
+    onAction: undoLastDeletion
+  });
+}
+
+/* =========================================================
    Тултипы
    ========================================================= */
 const tooltip = $("tooltip");
@@ -582,9 +1042,12 @@ function showTooltip(target) {
   tooltip.textContent = target.dataset.tip;
   const r = target.getBoundingClientRect();
   const tw = tooltip.offsetWidth;
+  const th = tooltip.offsetHeight;
   const left = Math.min(Math.max(r.left + r.width / 2 - tw / 2, 4), window.innerWidth - tw - 4);
+  let top = r.bottom + 6;
+  if (top + th > window.innerHeight - 4) top = r.top - th - 6;   // не помещается снизу — показываем сверху
   tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${r.bottom + 6}px`;
+  tooltip.style.top = `${Math.max(4, top)}px`;
   tooltip.classList.add("show");
 }
 
@@ -609,6 +1072,16 @@ document.addEventListener("dragstart", hideTooltip);
    События
    ========================================================= */
 $("btn-new").addEventListener("click", createFromActiveTab);
+els.searchBtn.addEventListener("click", toggleSearch);
+els.searchInput.addEventListener("input", onSearchInput);
+els.searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeSearch();
+    els.searchBtn.focus();
+  }
+});
+els.searchClear.addEventListener("click", clearSearchInput);
 els.sortBtn.addEventListener("click", toggleSort);
 els.modeBtn.addEventListener("click", toggleMode);
 $("btn-settings").addEventListener("click", () => {
@@ -619,6 +1092,21 @@ $("btn-back-editor").addEventListener("click", closeEditor);
 $("btn-back-settings").addEventListener("click", openList);
 $("btn-delete").addEventListener("click", deleteCurrent);
 $("btn-export").addEventListener("click", exportJson);
+$("btn-import").addEventListener("click", () => {
+  els.importFile.value = "";
+  els.importFile.click();
+});
+els.importFile.addEventListener("change", async () => {
+  const file = els.importFile.files && els.importFile.files[0];
+  if (!file) return;
+  await importJson(file);
+  els.importFile.value = "";
+});
+els.toastAction.addEventListener("click", () => {
+  const action = toastActionHandler;
+  dismissToast();
+  if (action) action();
+});
 $("btn-reset").addEventListener("click", resetAccent);
 els.themeSwitch.addEventListener("click", toggleTheme);
 
@@ -655,10 +1143,10 @@ els.source.addEventListener("click", (e) => {
   if (url && url !== "#") browser.tabs.create({ url });
 });
 
-// Сохранить несохранённое при закрытии панели
-window.addEventListener("pagehide", flushSave);
+// Сохранить несохранённое при закрытии панели (синхронно, без await)
+window.addEventListener("pagehide", flushSaveSync);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) flushSave();
+  if (document.hidden) flushSaveSync();
 });
 
 // Синхронизация, если данные изменились в другом окне
@@ -698,13 +1186,14 @@ browser.storage.onChanged.addListener((changes, area) => {
   }
 
   if (!changes[STORAGE_KEY]) return;
-  if (currentScreen === "editor") return;      // не мешаем редактированию
 
-  const incoming = (changes[STORAGE_KEY].newValue || []).map(normalizeNote);
+  const incoming = (changes[STORAGE_KEY].newValue || []).map(normalizeNote).filter(Boolean);
   // собственные записи не перерисовываем, иначе прервётся анимация
   if (JSON.stringify(incoming) === JSON.stringify(notes)) return;
 
   notes = incoming;
+  // В редакторе список не перерисовываем, но массив notes держим актуальным,
+  // чтобы проверка editingId замечала удаление заметки в другом окне.
   if (currentScreen === "list") renderList();
 });
 
@@ -714,6 +1203,7 @@ browser.storage.onChanged.addListener((changes, area) => {
 (async function init() {
   buildPalette();
   await loadAll();
+  await finalizeStaleTrash();   // доводим до конца удаления, начатые до перезагрузки
   applyTheme(settings.theme);   // тема + сохранённый акцентный цвет
   initSortable();
   updateSortUI();
