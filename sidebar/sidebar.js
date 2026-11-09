@@ -22,14 +22,27 @@ const MODE_LABELS = {
   manual: "Ручная сортировка: вкл"
 };
 
-// Акцентные цвета интерфейса: основной / при наведении / мягкий фон
+// Акцентные цвета интерфейса: светлая и тёмная палитры
+// color / hover / soft — для светлой темы, dark.* — для тёмной
 const ACCENTS = [
-  { id: "blue",   name: "Синий",       color: "#4F6BED", hover: "#3E58D4", soft: "#EAEEFF" },
-  { id: "green",  name: "Зелёный",     color: "#30A46C", hover: "#278A59", soft: "#E6F6EC" },
-  { id: "purple", name: "Фиолетовый",  color: "#8E4EC6", hover: "#7A3FAE", soft: "#F3EAFB" },
-  { id: "orange", name: "Оранжевый",   color: "#F76B15", hover: "#D95A0B", soft: "#FEEFE3" },
-  { id: "red",    name: "Красный",     color: "#E5484D", hover: "#C93A3F", soft: "#FDECEC" },
-  { id: "black",  name: "Чёрный",      color: "#1C2330", hover: "#3A4354", soft: "#EEF0F4" }
+  { id: "blue",   name: "Синий",
+    color: "#4F6BED", hover: "#3E58D4", soft: "#EAEEFF",
+    dark: { color: "#8DA2FF", hover: "#A6B7FF", soft: "#232C4A", contrast: "#0F1424" } },
+  { id: "green",  name: "Зелёный",
+    color: "#30A46C", hover: "#278A59", soft: "#E6F6EC",
+    dark: { color: "#4CC38A", hover: "#63D49B", soft: "#173326", contrast: "#06130C" } },
+  { id: "purple", name: "Фиолетовый",
+    color: "#8E4EC6", hover: "#7A3FAE", soft: "#F3EAFB",
+    dark: { color: "#B27CE6", hover: "#C493F0", soft: "#2B2138", contrast: "#120A1A" } },
+  { id: "orange", name: "Оранжевый",
+    color: "#F76B15", hover: "#D95A0B", soft: "#FEEFE3",
+    dark: { color: "#FF8A4C", hover: "#FFA06B", soft: "#392517", contrast: "#1A0C04" } },
+  { id: "red",    name: "Красный",
+    color: "#E5484D", hover: "#C93A3F", soft: "#FDECEC",
+    dark: { color: "#FF6E73", hover: "#FF8A8E", soft: "#3A1F21", contrast: "#1A0708" } },
+  { id: "black",  name: "Чёрный",
+    color: "#1C2330", hover: "#3A4354", soft: "#EEF0F4",
+    dark: { color: "#D9DEE7", hover: "#F0F2F6", soft: "#2A303C", contrast: "#0E1117" } }
 ];
 const DEFAULT_ACCENT = "blue";
 
@@ -67,7 +80,7 @@ function normalizeNote(n) {
    Хранилище
    ========================================================= */
 let notes = [];
-let settings = { sort: "newest", mode: "auto" };   // sort: направление по дате, mode: auto | manual
+let settings = { sort: "newest", mode: "auto", theme: "light" };   // sort: направление по дате, mode: auto | manual, theme: light | dark
 let accentId = DEFAULT_ACCENT;
 
 async function loadAll() {
@@ -79,6 +92,7 @@ async function loadAll() {
   if (s) {
     if (SORT_LABELS[s.sort]) settings.sort = s.sort;
     if (MODE_LABELS[s.mode]) settings.mode = s.mode;
+    if (s.theme === "dark" || s.theme === "light") settings.theme = s.theme;
   }
 
   if (ACCENTS.some((a) => a.id === data[ACCENT_KEY])) accentId = data[ACCENT_KEY];
@@ -113,7 +127,9 @@ const els = {
   sortBtn: $("btn-sort"),
   modeBtn: $("btn-mode"),
   colorPicker: $("color-picker"),
-  palette: $("accent-palette")
+  palette: $("accent-palette"),
+  themeSwitch: $("theme-switch"),
+  themeState: $("theme-state")
 };
 
 /* =========================================================
@@ -142,14 +158,38 @@ function showScreen(name) {
 }
 
 /* =========================================================
+   Тема: светлая / тёмная
+   ========================================================= */
+function applyTheme(theme) {
+  const dark = theme === "dark";
+  settings.theme = dark ? "dark" : "light";
+  document.documentElement.dataset.theme = settings.theme;
+
+  els.themeSwitch.setAttribute("aria-checked", String(dark));
+  els.themeSwitch.dataset.tip = dark ? "Включить светлую тему" : "Включить тёмную тему";
+  els.themeState.textContent = dark ? "Тёмная" : "Светлая";
+
+  // Мягкие фоны и контраст акцента зависят от темы
+  applyAccent(accentId);
+}
+
+function toggleTheme() {
+  applyTheme(settings.theme === "dark" ? "light" : "dark");
+  persistSettings();
+}
+
+/* =========================================================
    Акцентный цвет
    ========================================================= */
 function applyAccent(id) {
   const a = ACCENTS.find((x) => x.id === id) || ACCENTS[0];
+  const dark = settings.theme === "dark";
+  const vars = dark ? a.dark : { color: a.color, hover: a.hover, soft: a.soft, contrast: "#FFFFFF" };
   const root = document.documentElement.style;
-  root.setProperty("--accent-color", a.color);
-  root.setProperty("--accent-hover", a.hover);
-  root.setProperty("--accent-soft", a.soft);
+  root.setProperty("--accent-color", vars.color);
+  root.setProperty("--accent-hover", vars.hover);
+  root.setProperty("--accent-soft", vars.soft);
+  root.setProperty("--accent-contrast", vars.contrast);
   accentId = a.id;
   els.palette.querySelectorAll(".swatch").forEach((sw) => {
     sw.setAttribute("aria-checked", String(sw.dataset.accent === a.id));
@@ -163,7 +203,8 @@ function buildPalette() {
     sw.className = "swatch";
     sw.dataset.accent = a.id;
     sw.dataset.tip = a.name;
-    sw.style.background = a.color;
+    sw.style.setProperty("--swatch-color", a.color);
+    sw.style.setProperty("--swatch-color-dark", a.dark.color);
     sw.setAttribute("role", "radio");
     sw.setAttribute("aria-label", a.name);
     els.palette.appendChild(sw);
@@ -579,6 +620,7 @@ $("btn-back-settings").addEventListener("click", openList);
 $("btn-delete").addEventListener("click", deleteCurrent);
 $("btn-export").addEventListener("click", exportJson);
 $("btn-reset").addEventListener("click", resetAccent);
+els.themeSwitch.addEventListener("click", toggleTheme);
 
 els.palette.addEventListener("click", (e) => {
   const sw = e.target.closest(".swatch");
@@ -629,6 +671,32 @@ browser.storage.onChanged.addListener((changes, area) => {
     if (next !== accentId) applyAccent(next);
   }
 
+  // настройки (тема, сортировка, режим), изменённые в другом окне
+  if (changes[SETTINGS_KEY]) {
+    const next = changes[SETTINGS_KEY].newValue || {};
+    let changed = false;
+
+    if (SORT_LABELS[next.sort] && next.sort !== settings.sort) {
+      settings.sort = next.sort;
+      changed = true;
+    }
+    if (MODE_LABELS[next.mode] && next.mode !== settings.mode) {
+      settings.mode = next.mode;
+      changed = true;
+    }
+
+    const nextTheme = next.theme === "dark" ? "dark" : "light";
+    if (nextTheme !== settings.theme) {
+      applyTheme(nextTheme);
+      changed = true;
+    }
+
+    if (changed) {
+      updateSortUI();
+      if (currentScreen === "list") renderList();
+    }
+  }
+
   if (!changes[STORAGE_KEY]) return;
   if (currentScreen === "editor") return;      // не мешаем редактированию
 
@@ -646,7 +714,7 @@ browser.storage.onChanged.addListener((changes, area) => {
 (async function init() {
   buildPalette();
   await loadAll();
-  applyAccent(accentId);   // применяем сохранённый акцентный цвет
+  applyTheme(settings.theme);   // тема + сохранённый акцентный цвет
   initSortable();
   updateSortUI();
   openList();
