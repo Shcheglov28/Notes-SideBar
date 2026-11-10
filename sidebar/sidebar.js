@@ -15,6 +15,15 @@ const NOTICE_DELAY = 4000;    // мс — обычные уведомления
 const COLORS = ["gray", "red", "yellow", "green", "blue", "purple"];
 const DEFAULT_COLOR = "gray";
 
+const SUPPORT_EMAIL = "m.k.shcheglov@gmail.com";
+
+// Напоминание о бэкапе: показываем только при заметках > порога и не чаще,
+// чем раз за сессию браузера (storage.session) либо раз в 24 часа (fallback).
+const BACKUP_REMINDER_KEY = "backupReminderShown";         // ключ в browser.storage.session
+const BACKUP_REMINDER_TIME_KEY = "lastBackupReminderTime"; // ключ в browser.storage.local (fallback)
+const BACKUP_NOTES_THRESHOLD = 10;                         // показывать, если заметок строго больше
+const BACKUP_REMINDER_INTERVAL = 24 * 60 * 60 * 1000;      // 24 часа — fallback-интервал
+
 const SORT_LABELS = {
   newest: "Сначала новые",
   oldest: "Сначала старые"
@@ -60,7 +69,8 @@ function createNote({ title = "", content = "", url = "" } = {}) {
     updatedAt: now,
     color: DEFAULT_COLOR,   // цветовая метка
     orderIndex: null,       // позиция при ручной сортировке
-    links: []               // задел на будущее: id связанных заметок (граф)
+    links: [],              // задел на будущее: id связанных заметок (граф)
+    isPinned: false         // закреплена ли заметка (всегда сверху списка)
   };
 }
 
@@ -98,7 +108,8 @@ function normalizeNote(n) {
     url: strOrEmpty(n.url),
     color: COLORS.includes(n.color) ? n.color : DEFAULT_COLOR,
     orderIndex: idx,
-    links: Array.isArray(n.links) ? n.links : []
+    links: Array.isArray(n.links) ? n.links : [],
+    isPinned: n.isPinned === true
   };
 }
 
@@ -162,12 +173,16 @@ const els = {
   list: $("note-list"),
   empty: $("empty-state"),
   emptySearch: $("empty-search"),
+  emptyFilter: $("empty-filter"),
   searchBar: $("search-bar"),
   searchInput: $("search-input"),
   searchClear: $("btn-search-clear"),
   searchBtn: $("btn-search"),
+  filterBtn: $("btn-filter"),
   title: $("editor-title"),
   body: $("editor-body"),
+  preview: $("editor-preview"),
+  viewBtn: $("btn-view"),
   source: $("editor-source"),
   sourceText: $("editor-source-text"),
   status: $("save-status"),
@@ -179,6 +194,7 @@ const els = {
   palette: $("accent-palette"),
   themeSwitch: $("theme-switch"),
   themeState: $("theme-state"),
+  supportBtn: $("btn-support"),
   toast: $("toast"),
   toastText: $("toast-text"),
   toastAction: $("toast-action"),
@@ -190,6 +206,60 @@ const els = {
    ========================================================= */
 const ICON_TRASH =
   '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M6 6l1 14a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-14M10 11v6M14 11v6"/></svg>';
+
+const ICON_PIN =
+  '<svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 3v2H6v-2l4-3-1-6zM12 14v7"/></svg>';
+
+const ICON_COPY =
+  '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+
+/* =========================================================
+   Markdown-рендер и Wiki-ссылки
+   =========================================================
+   renderMarkdown превращает Markdown в безопасный HTML:
+   marked.parse → DOMPurify.sanitize. Wiki-ссылки [[Название]]
+   размечаются как <a class="wiki-link" data-wiki="…"> до парсинга. */
+const WIKI_RE = /\[\[([^\[\]]+?)\]\]/g;
+
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Заменяет [[Название]] на ссылку, чтобы marked не «съел» скобки.
+// Текст экранируем, чтобы исключить инъекцию через содержимое ссылки.
+function wikiToLinks(text) {
+  return text.replace(WIKI_RE, (m, title) => {
+    const t = title.trim();
+    if (!t) return m;
+    return `<a class="wiki-link" data-wiki="${escapeHtml(t)}" href="#">${escapeHtml(t)}</a>`;
+  });
+}
+
+function renderMarkdown(text) {
+  if (typeof marked === "undefined") return "";
+  const prepared = wikiToLinks(text || "");
+  const html = marked.parse(prepared, { breaks: true, gfm: true });
+  return typeof DOMPurify !== "undefined" ? DOMPurify.sanitize(html) : html;
+}
+
+// Клик по Wiki-ссылке: ищем заметку по title и открываем её в редакторе
+function onWikiLinkClick(e) {
+  const link = e.target.closest(".wiki-link");
+  if (!link) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const title = link.dataset.wiki || "";
+  const target = notes.find((n) => n.title.trim().toLowerCase() === title.trim().toLowerCase());
+  if (target) {
+    openEditor(target.id);
+  } else {
+    showToast({ text: `Заметка «${title}» не найдена`, variant: "error", duration: 5000 });
+  }
+}
 
 /* =========================================================
    Навигация между экранами (fade-in через CSS transition)
@@ -275,6 +345,74 @@ function resetAccent() {
 }
 
 /* =========================================================
+   Поддержка и напоминание о бэкапе
+   ========================================================= */
+async function copySupportEmail() {
+  try {
+    await navigator.clipboard.writeText(SUPPORT_EMAIL);
+    showToast({ text: "Email скопирован", variant: "success" });
+  } catch {
+    showToast({ text: `Напишите нам: ${SUPPORT_EMAIL}`, duration: 6000 });
+  }
+}
+
+// Есть ли доступ к browser.storage.session (MV3, Firefox 115+)
+function hasSessionStorage() {
+  return !!(browser.storage && browser.storage.session);
+}
+
+// Сбрасывает флаг напоминания: после экспорта бэкап считаем сделанным
+async function resetBackupReminder() {
+  try {
+    if (hasSessionStorage()) await browser.storage.session.remove(BACKUP_REMINDER_KEY);
+  } catch { /* session-хранилище может быть недоступно — не критично */ }
+  try {
+    await browser.storage.local.remove(BACKUP_REMINDER_TIME_KEY);
+  } catch { /* ignore */ }
+}
+
+// Напоминаем о резервной копии, если заметок много и напоминания не было
+// в текущей сессии браузера (storage.session) либо последние 24 часа (fallback).
+async function maybeShowBackupReminder() {
+  if (notes.length <= BACKUP_NOTES_THRESHOLD) return;   // мало заметок — не беспокоим
+
+  if (hasSessionStorage()) {
+    let shown = false;
+    try {
+      const data = await browser.storage.session.get(BACKUP_REMINDER_KEY);
+      shown = !!data[BACKUP_REMINDER_KEY];
+    } catch {
+      // session-хранилище недоступно — уходим на fallback ниже
+      return maybeShowBackupReminderLocal();
+    }
+    if (shown) return;
+    try {
+      await browser.storage.session.set({ [BACKUP_REMINDER_KEY]: true });
+    } catch { /* ignore */ }
+    showToast({ text: "Не забудьте сделать резервную копию в настройках!" });
+    return;
+  }
+
+  return maybeShowBackupReminderLocal();
+}
+
+// Fallback: напоминание не чаще одного раза в 24 часа (browser.storage.local)
+async function maybeShowBackupReminderLocal() {
+  let last = 0;
+  try {
+    const data = await browser.storage.local.get(BACKUP_REMINDER_TIME_KEY);
+    last = Number(data[BACKUP_REMINDER_TIME_KEY]) || 0;
+  } catch {
+    last = 0;
+  }
+  if (Date.now() - last < BACKUP_REMINDER_INTERVAL) return;
+  try {
+    await browser.storage.local.set({ [BACKUP_REMINDER_TIME_KEY]: Date.now() });
+  } catch { /* ignore */ }
+  showToast({ text: "Не забудьте сделать резервную копию в настройках!" });
+}
+
+/* =========================================================
    Сортировка: по дате (auto) / ручная (manual)
    ========================================================= */
 let sortable = null;
@@ -293,10 +431,10 @@ function updateSortUI() {
   els.modeBtn.dataset.tip = MODE_LABELS[settings.mode];
   els.modeBtn.setAttribute("aria-pressed", String(isManual()));
 
-  // Во время поиска перетаскивание отключено: скрытые заметки не должны менять порядок
-  const searching = !els.searchBar.hidden;
-  els.list.classList.toggle("manual", isManual() && !searching);
-  if (sortable) sortable.option("disabled", !isManual() || searching);
+  // Во время поиска/фильтра перетаскивание отключено: скрытые заметки не должны менять порядок
+  const listFiltered = !els.searchBar.hidden || !!filterHost;
+  els.list.classList.toggle("manual", isManual() && !listFiltered);
+  if (sortable) sortable.option("disabled", !isManual() || listFiltered);
 }
 
 function toggleSort() {
@@ -337,12 +475,18 @@ function topOrderIndex() {
 }
 
 function sortedNotes() {
+  let list;
   if (isManual()) {
     ensureOrder();
-    return [...notes].sort((a, b) => a.orderIndex - b.orderIndex);
+    list = [...notes].sort((a, b) => a.orderIndex - b.orderIndex);
+  } else {
+    const dir = settings.sort === "newest" ? -1 : 1;
+    list = [...notes].sort((a, b) => (a.createdAt - b.createdAt) * dir);
   }
-  const dir = settings.sort === "newest" ? -1 : 1;
-  return [...notes].sort((a, b) => (a.createdAt - b.createdAt) * dir);
+  // Закреплённые заметки всегда вверху, независимо от текущей сортировки
+  const pinned = list.filter((n) => n.isPinned);
+  const rest = list.filter((n) => !n.isPinned);
+  return pinned.concat(rest);
 }
 
 function initSortable() {
@@ -350,7 +494,7 @@ function initSortable() {
   sortable = new Sortable(els.list, {
     animation: 150,
     draggable: ".note-item:not(.removing)",
-    filter: ".note-delete",
+    filter: ".note-action",
     preventOnFilter: false,
     ghostClass: "drag-ghost",
     disabled: !isManual(),
@@ -392,6 +536,7 @@ function buildNoteItem(note) {
   li.className = "note-item";
   li.dataset.id = note.id;
   li.dataset.color = note.color;
+  if (note.isPinned) li.classList.add("pinned");
 
   const main = document.createElement("div");
   main.className = "note-main";
@@ -404,8 +549,9 @@ function buildNoteItem(note) {
 
   if (note.content.trim()) {
     const preview = document.createElement("div");
-    preview.className = "note-preview";
-    preview.textContent = note.content.trim().slice(0, 200);
+    preview.className = "note-preview markdown-body";
+    // Превью рендерим как Markdown; HTML очищен через DOMPurify
+    preview.innerHTML = renderMarkdown(note.content.trim().slice(0, 300));
     main.appendChild(preview);
   }
 
@@ -423,14 +569,33 @@ function buildNoteItem(note) {
   }
   main.appendChild(meta);
 
+  const actions = document.createElement("div");
+  actions.className = "note-actions";
+
+  const pin = document.createElement("button");
+  pin.className = "note-action note-pin";
+  pin.type = "button";
+  pin.dataset.tip = note.isPinned ? "Открепить" : "Закрепить";
+  pin.setAttribute("aria-label", note.isPinned ? "Открепить заметку" : "Закрепить заметку");
+  pin.setAttribute("aria-pressed", String(!!note.isPinned));
+  pin.innerHTML = ICON_PIN;
+
+  const copy = document.createElement("button");
+  copy.className = "note-action note-copy";
+  copy.type = "button";
+  copy.dataset.tip = "Копировать текст";
+  copy.setAttribute("aria-label", "Копировать текст заметки");
+  copy.innerHTML = ICON_COPY;
+
   const del = document.createElement("button");
-  del.className = "note-delete";
+  del.className = "note-action note-delete";
   del.type = "button";
   del.dataset.tip = "Удалить";
   del.setAttribute("aria-label", "Удалить заметку");
   del.innerHTML = ICON_TRASH;
 
-  li.append(main, del);
+  actions.append(pin, copy, del);
+  li.append(main, actions);
   return li;
 }
 
@@ -443,11 +608,44 @@ function noteMatches(note, needle) {
     note.content.toLowerCase().includes(needle);
 }
 
+// Активный домен для фильтра; null — фильтр выключен
+let filterHost = null;
+
+// Домен текущей активной вкладки (для фильтра списка)
+async function activeTabHost() {
+  const tab = await getActiveTab();
+  const url = tab && tab.url ? tab.url : "";
+  return hostOf(url);
+}
+
+async function toggleFilter() {
+  if (filterHost) {
+    filterHost = null;
+  } else {
+    const host = await activeTabHost();
+    if (!host) {
+      showToast({ text: "Не удалось определить домен страницы", variant: "error", duration: 5000 });
+      return;
+    }
+    filterHost = host;
+  }
+  updateFilterUI();
+  renderList();
+}
+
+function updateFilterUI() {
+  const on = !!filterHost;
+  els.filterBtn.setAttribute("aria-pressed", String(on));
+  els.filterBtn.dataset.tip = on ? `Фильтр: ${filterHost} (нажмите, чтобы выключить)` : "Фильтр по домену страницы";
+}
+
 function updateEmptyStates() {
   const q = searchQuery();
   const visible = els.list.querySelectorAll(".note-item:not(.removing)").length;
-  els.empty.hidden = !(visible === 0 && notes.length === 0 && !q);
+  const filtering = !!filterHost;
+  els.empty.hidden = !(visible === 0 && notes.length === 0 && !q && !filtering);
   els.emptySearch.hidden = !(visible === 0 && !!q);
+  els.emptyFilter.hidden = !(visible === 0 && filtering && !q);
 }
 
 function openSearch() {
@@ -500,7 +698,9 @@ function renderList() {
   const q = searchQuery();
   const needle = q.toLowerCase();
   const sorted = sortedNotes();
-  const visible = needle ? sorted.filter((note) => noteMatches(note, needle)) : sorted;
+  let visible = needle ? sorted.filter((note) => noteMatches(note, needle)) : sorted;
+  // Фильтр по домену текущей вкладки
+  if (filterHost) visible = visible.filter((note) => hostOf(note.url) === filterHost);
 
   const prevScroll = els.list.scrollTop;   // сохраняем позицию до перерисовки
   els.list.textContent = "";
@@ -527,6 +727,27 @@ function renderList() {
     }));
     // после появления сбрасываем задержку, чтобы hover не «тормозил»
     setTimeout(() => items.forEach((li) => (li.style.transitionDelay = "")), 500);
+  }
+}
+
+// Переключает закрепление заметки и перерисовывает список
+function togglePin(id) {
+  const note = notes.find((n) => n.id === id);
+  if (!note) return;
+  note.isPinned = !note.isPinned;
+  persist();
+  renderList();
+}
+
+// Копирует содержимое заметки в буфер обмена (не открывая редактор)
+async function copyNoteContent(id) {
+  const note = notes.find((n) => n.id === id);
+  if (!note) return;
+  try {
+    await navigator.clipboard.writeText(note.content);
+    showToast({ text: "Текст скопирован", variant: "success" });
+  } catch {
+    showToast({ text: "Не удалось скопировать", variant: "error", duration: 5000 });
   }
 }
 
@@ -661,6 +882,7 @@ async function removeNoteFromList(li) {
 let editingId = null;
 let saveTimer = null;
 let dirty = false;
+let viewMode = false;   // true — режим просмотра (HTML), false — режим редактирования
 
 function setColorUI(color) {
   els.colorPicker.querySelectorAll(".color-dot").forEach((dot) => {
@@ -668,7 +890,37 @@ function setColorUI(color) {
   });
 }
 
-function openEditor(id, { focusTitle = false } = {}) {
+// Применяет текущий режим к DOM: либо textarea-редактор, либо Markdown-просмотр
+function applyViewMode() {
+  els.viewBtn.setAttribute("aria-pressed", String(viewMode));
+  els.viewBtn.dataset.tip = viewMode ? "Режим: просмотр" : "Режим: редактирование";
+  els.viewBtn.setAttribute("aria-label", viewMode ? "Переключить на редактирование" : "Переключить на просмотр");
+
+  els.body.hidden = viewMode;
+  els.preview.hidden = !viewMode;
+
+  if (viewMode) {
+    const text = els.body.value.trim();
+    els.preview.innerHTML = text
+      ? renderMarkdown(text)
+      : '<p class="editor-preview-empty">Заметка пуста</p>';
+  }
+}
+
+function setViewMode(next) {
+  if (viewMode === next) return;
+  // Уходим из редактирования с правками — фиксируем их, чтобы просмотр был актуален
+  if (next && !viewMode && dirty) scheduleSave();
+  viewMode = next;
+  applyViewMode();
+  if (!viewMode) setTimeout(() => els.body.focus(), 0);
+}
+
+function toggleViewMode() {
+  setViewMode(!viewMode);
+}
+
+function openEditor(id, { focusTitle = false, edit = false } = {}) {
   const note = notes.find((n) => n.id === id);
   if (!note) return openList();
 
@@ -688,8 +940,14 @@ function openEditor(id, { focusTitle = false } = {}) {
     els.source.hidden = true;
   }
 
+  viewMode = !edit;          // по умолчанию открываем просмотр
+  applyViewMode();
+
   showScreen("editor");
-  setTimeout(() => (focusTitle ? els.title : els.body).focus(), 50);
+  setTimeout(() => {
+    if (viewMode) return;
+    (focusTitle ? els.title : els.body).focus();
+  }, 50);
 }
 
 function scheduleSave() {
@@ -816,7 +1074,7 @@ async function createFromActiveTab() {
   note.orderIndex = topOrderIndex();   // в ручном режиме новая заметка встаёт наверх
   notes.push(note);
   await persist();
-  openEditor(note.id);
+  openEditor(note.id, { edit: true });   // новую заметку открываем сразу в редактировании
 }
 
 /* =========================================================
@@ -847,6 +1105,7 @@ async function exportJson() {
     a.remove();
   }
   els.exportHint.textContent = `Экспортировано заметок: ${notes.length}`;
+  await resetBackupReminder();   // бэкап сделан — сбрасываем напоминание
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
@@ -885,7 +1144,8 @@ function toImportedNote(raw, index) {
     color: raw.color,
     orderIndex: raw.orderIndex,
     order: raw.order,
-    links: raw.links
+    links: raw.links,
+    isPinned: raw.isPinned
   });
   if (!note) throw new Error(`${label}: некорректная структура заметки`);
 
@@ -1073,6 +1333,7 @@ document.addEventListener("dragstart", hideTooltip);
    ========================================================= */
 $("btn-new").addEventListener("click", createFromActiveTab);
 els.searchBtn.addEventListener("click", toggleSearch);
+els.filterBtn.addEventListener("click", toggleFilter);
 els.searchInput.addEventListener("input", onSearchInput);
 els.searchInput.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
@@ -1091,6 +1352,8 @@ $("btn-settings").addEventListener("click", () => {
 $("btn-back-editor").addEventListener("click", closeEditor);
 $("btn-back-settings").addEventListener("click", openList);
 $("btn-delete").addEventListener("click", deleteCurrent);
+els.viewBtn.addEventListener("click", toggleViewMode);
+els.preview.addEventListener("click", onWikiLinkClick);
 $("btn-export").addEventListener("click", exportJson);
 $("btn-import").addEventListener("click", () => {
   els.importFile.value = "";
@@ -1109,6 +1372,7 @@ els.toastAction.addEventListener("click", () => {
 });
 $("btn-reset").addEventListener("click", resetAccent);
 els.themeSwitch.addEventListener("click", toggleTheme);
+els.supportBtn.addEventListener("click", copySupportEmail);
 
 els.palette.addEventListener("click", (e) => {
   const sw = e.target.closest(".swatch");
@@ -1118,9 +1382,17 @@ els.palette.addEventListener("click", (e) => {
 els.list.addEventListener("click", (e) => {
   const item = e.target.closest(".note-item");
   if (!item || item.classList.contains("removing")) return;
-  if (e.target.closest(".note-delete")) {
+  if (e.target.closest(".wiki-link")) {
+    onWikiLinkClick(e);          // Wiki-ссылка в превью открывает целевую заметку
+  } else if (e.target.closest(".note-delete")) {
     e.stopPropagation();
     removeNoteFromList(item);
+  } else if (e.target.closest(".note-pin")) {
+    e.stopPropagation();
+    togglePin(item.dataset.id);
+  } else if (e.target.closest(".note-copy")) {
+    e.stopPropagation();
+    copyNoteContent(item.dataset.id);
   } else {
     openEditor(item.dataset.id);
   }
@@ -1148,6 +1420,16 @@ window.addEventListener("pagehide", flushSaveSync);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) flushSaveSync();
 });
+
+// При смене активной вкладки обновляем фильтр по домену (если он включён)
+if (browser.tabs && browser.tabs.onActivated) {
+  browser.tabs.onActivated.addListener(async () => {
+    if (!filterHost || currentScreen !== "list") return;
+    filterHost = await activeTabHost();
+    updateFilterUI();
+    renderList();
+  });
+}
 
 // Синхронизация, если данные изменились в другом окне
 browser.storage.onChanged.addListener((changes, area) => {
@@ -1207,5 +1489,7 @@ browser.storage.onChanged.addListener((changes, area) => {
   applyTheme(settings.theme);   // тема + сохранённый акцентный цвет
   initSortable();
   updateSortUI();
+  updateFilterUI();
   openList();
+  await maybeShowBackupReminder();   // напоминание о резервной копии (с учётом условий)
 })();
