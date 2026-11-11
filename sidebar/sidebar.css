@@ -752,6 +752,30 @@ svg {
 }
 .btn.secondary:hover { background: var(--bg-hover); border-color: var(--border-strong); }
 
+/* Футер настроек: ссылка на репозиторий проекта */
+.settings-footer {
+  padding: var(--space-2) 0 var(--space-4);
+  text-align: center;
+}
+.settings-footer-link {
+  display: inline-block;
+  padding: 3px 6px;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: none;
+  transition: color var(--fade), background var(--fade);
+}
+.settings-footer-link:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  text-decoration: underline;
+}
+.settings-footer-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ===== Тост (уведомления и Undo) ===== */
 .toast {
   position: fixed;

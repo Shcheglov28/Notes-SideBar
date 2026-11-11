@@ -920,7 +920,7 @@ function toggleViewMode() {
   setViewMode(!viewMode);
 }
 
-function openEditor(id, { focusTitle = false, edit = false } = {}) {
+function openEditor(id, { edit = false } = {}) {
   const note = notes.find((n) => n.id === id);
   if (!note) return openList();
 
@@ -944,10 +944,15 @@ function openEditor(id, { focusTitle = false, edit = false } = {}) {
   applyViewMode();
 
   showScreen("editor");
-  setTimeout(() => {
-    if (viewMode) return;
-    (focusTitle ? els.title : els.body).focus();
-  }, 50);
+  // Автофокус в заголовок: можно сразу продолжать печатать (курсор — в конец)
+  setTimeout(focusTitle, 50);
+}
+
+// Ставит фокус в поле заголовка и переводит курсор в конец текста
+function focusTitle() {
+  els.title.focus();
+  const end = els.title.value.length;
+  els.title.setSelectionRange(end, end);
 }
 
 function scheduleSave() {
@@ -1106,6 +1111,51 @@ async function exportJson() {
   }
   els.exportHint.textContent = `Экспортировано заметок: ${notes.length}`;
   await resetBackupReminder();   // бэкап сделан — сбрасываем напоминание
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+/* =========================================================
+   Экспорт заметки в Markdown (.md)
+   ========================================================= */
+// Имя файла из заголовка: символы, недопустимые в именах файлов, → «_»;
+// пустой заголовок → Untitled.md
+function markdownFileName(title) {
+  const base = title
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, " ")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 80)
+    .trim();
+  return `${base || "Untitled"}.md`;
+}
+
+// Скачивает текущую заметку как .md. Автосохранение не прерываем:
+// значения берём прямо из полей и не трогаем таймер saveTimer.
+async function exportMarkdown() {
+  if (!editingId) return;
+  const note = notes.find((n) => n.id === editingId);
+  if (!note) return;
+
+  const title = els.title.value.trim();
+  const heading = `# ${title || "Без названия"}`;
+  const text = `${heading}\n\n${els.body.value}`;
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const filename = markdownFileName(title);
+
+  try {
+    await browser.downloads.download({ url, filename, saveAs: false });
+  } catch (err) {
+    // запасной вариант: ссылка с атрибутом download
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  showToast({ text: "Заметка сохранена в Markdown", variant: "success" });
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
@@ -1352,6 +1402,7 @@ $("btn-settings").addEventListener("click", () => {
 $("btn-back-editor").addEventListener("click", closeEditor);
 $("btn-back-settings").addEventListener("click", openList);
 $("btn-delete").addEventListener("click", deleteCurrent);
+$("btn-export-md").addEventListener("click", exportMarkdown);
 els.viewBtn.addEventListener("click", toggleViewMode);
 els.preview.addEventListener("click", onWikiLinkClick);
 $("btn-export").addEventListener("click", exportJson);
